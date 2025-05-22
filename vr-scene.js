@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { ControllerCubes } from './controller-cubes.js';
+import { ControllerRays } from './controller-rays.js';
 
 let camera, scene, renderer;
 let controller1, controller2;
@@ -9,6 +11,10 @@ let intersected;
 let canvasPanel;
 let isInVR = false;
 let currentSession = null;
+let controllerCubes, controllerRays;
+let moveSpeed = 0.1;
+let rotateSpeed = 0.02;
+let keys = {};
 
 function showMessage(text) {
     const messageEl = document.getElementById('message');
@@ -66,23 +72,6 @@ function createControllerModel(index) {
 }
 
 function addControllerMesh(controller, controllerGrip, index) {
-    // Add pointer ray
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, -1], 3));
-    const material = new THREE.LineBasicMaterial({
-        color: index === 0 ? 0xff0000 : 0x0000ff,
-        transparent: true,
-        opacity: 0.75
-    });
-    const line = new THREE.Line(geometry, material);
-    line.name = 'pointer';
-    line.scale.z = 5;
-    controller.add(line);
-
-    // Add controller model
-    const model = createControllerModel(index);
-    controllerGrip.add(model);
-
     // Add position indicator sphere
     const sphereGeometry = new THREE.SphereGeometry(0.02, 16, 16);
     const sphereMaterial = new THREE.MeshPhongMaterial({
@@ -146,23 +135,33 @@ async function init() {
     canvasPanel.position.set(0, 1.6, -2);
     scene.add(canvasPanel);
 
+    // Initialize controller components
+    controllerCubes = new ControllerCubes();
+    controllerRays = new ControllerRays();
+
     // Controllers setup
     controller1 = renderer.xr.getController(0);
     controller1.addEventListener('selectstart', onSelectStart);
     controller1.addEventListener('selectend', onSelectEnd);
     scene.add(controller1);
 
-    controllerGrip1 = renderer.xr.getControllerGrip(0);
-    scene.add(controllerGrip1);
-    addControllerMesh(controller1, controllerGrip1, 0);
-
     controller2 = renderer.xr.getController(1);
     controller2.addEventListener('selectstart', onSelectStart);
     controller2.addEventListener('selectend', onSelectEnd);
     scene.add(controller2);
 
+    controllerGrip1 = renderer.xr.getControllerGrip(0);
+    scene.add(controllerGrip1);
+
     controllerGrip2 = renderer.xr.getControllerGrip(1);
     scene.add(controllerGrip2);
+
+    // Attach cubes and rays
+    controllerCubes.attachToControllers(controller2, controller1); // Note: 2 is left, 1 is right
+    controllerRays.attachToParents(controllerCubes.getCube('left'), controllerCubes.getCube('right'));
+
+    // Add basic controller meshes
+    addControllerMesh(controller1, controllerGrip1, 0);
     addControllerMesh(controller2, controllerGrip2, 1);
 
     // VR Button setup
@@ -198,6 +197,15 @@ async function init() {
     // Window resize handler
     window.addEventListener('resize', onWindowResize);
 
+    // Add keyboard controls
+    window.addEventListener('keydown', (e) => {
+        keys[e.key.toLowerCase()] = true;
+    });
+
+    window.addEventListener('keyup', (e) => {
+        keys[e.key.toLowerCase()] = false;
+    });
+
     // Start animation loop
     renderer.setAnimationLoop(animate);
 
@@ -216,18 +224,30 @@ function onSelectStart(event) {
     if (!isInVR) return;
 
     const controller = event.target;
-    const intersections = getIntersections(controller);
+    const side = controller === controller2 ? 'left' : 'right';
+    
+    if (side === 'left') {
+        controllerRays.onTriggerPressed(side);
+    }
 
+    const intersections = getIntersections(controller);
     if (intersections.length > 0) {
         const intersection = intersections[0];
         intersected = intersection.object;
-        // Handle interaction with the canvas panel
         console.log('Canvas panel clicked at:', intersection.point);
     }
 }
 
-function onSelectEnd() {
+function onSelectEnd(event) {
     if (!isInVR) return;
+    
+    const controller = event.target;
+    const side = controller === controller2 ? 'left' : 'right';
+    
+    if (side === 'left') {
+        controllerRays.onTriggerReleased(side);
+    }
+    
     intersected = null;
 }
 
@@ -241,8 +261,32 @@ function getIntersections(controller) {
     return raycaster.intersectObject(canvasPanel);
 }
 
+function handleMovement() {
+    if (!isInVR || !camera) return;
+
+    // Forward/Backward
+    if (keys['w']) camera.position.z -= moveSpeed;
+    if (keys['s']) camera.position.z += moveSpeed;
+
+    // Left/Right
+    if (keys['a']) camera.position.x -= moveSpeed;
+    if (keys['d']) camera.position.x += moveSpeed;
+
+    // Up/Down
+    if (keys['q']) camera.position.y -= moveSpeed;
+    if (keys['e']) camera.position.y += moveSpeed;
+
+    // Rotation
+    if (keys['arrowleft']) camera.rotation.y += rotateSpeed;
+    if (keys['arrowright']) camera.rotation.y -= rotateSpeed;
+    if (keys['arrowup']) camera.rotation.x += rotateSpeed;
+    if (keys['arrowdown']) camera.rotation.x -= rotateSpeed;
+}
+
 function animate() {
     if (isInVR) {
+        handleMovement();
+
         // Check for controller intersections
         const intersections1 = getIntersections(controller1);
         const intersections2 = getIntersections(controller2);
